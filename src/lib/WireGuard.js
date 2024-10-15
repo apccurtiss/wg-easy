@@ -29,6 +29,19 @@ const {
 } = require('../config');
 
 module.exports = class WireGuard {
+  async __buildAddressFromOffset(offset) {
+    let [ip, mask] = WG_DEFAULT_ADDRESS.split('/');
+    let possible_clients = 2 ** (32-Number(mask));
+    if (offset > possible_clients) {
+      throw Error('Maximum number of clients reached');
+    }
+    else {
+      let parts = ip.split('.');
+      return parts.map(function (value, index) {
+        return Number(value) + Math.floor(offset / (256 ** (3-index))) % 256;
+      }).join('.');
+    }
+  }
 
   async __buildConfig() {
     this.__configPromise = Promise.resolve().then(async () => {
@@ -47,7 +60,7 @@ module.exports = class WireGuard {
         const publicKey = await Util.exec(`echo ${privateKey} | wg pubkey`, {
           log: 'echo ***hidden*** | wg pubkey',
         });
-        const address = WG_DEFAULT_ADDRESS.replace('x', '1');
+        const address = await this.__buildAddressFromOffset(1);
 
         config = {
           server: {
@@ -79,7 +92,7 @@ module.exports = class WireGuard {
 
         throw err;
       });
-      // await Util.exec(`iptables -t nat -A POSTROUTING -s ${WG_DEFAULT_ADDRESS.replace('x', '0')}/24 -o ' + WG_DEVICE + ' -j MASQUERADE`);
+      // await Util.exec(`iptables -t nat -A POSTROUTING -s ${WG_DEFAULT_ADDRESS} -o ' + WG_DEVICE + ' -j MASQUERADE`);
       // await Util.exec('iptables -A INPUT -p udp -m udp --dport 51820 -j ACCEPT');
       // await Util.exec('iptables -A FORWARD -i wg0 -j ACCEPT');
       // await Util.exec('iptables -A FORWARD -o wg0 -j ACCEPT');
@@ -250,20 +263,19 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
 
     // Calculate next IP
     let address;
-    for (let i = 2; i < 255; i++) {
+    for (let i = 2;; i++) {
+      const new_address = await this.__buildAddressFromOffset(i);
+
       const client = Object.values(config.clients).find((client) => {
-        return client.address === WG_DEFAULT_ADDRESS.replace('x', i);
+        return client.address === new_address;
       });
 
       if (!client) {
-        address = WG_DEFAULT_ADDRESS.replace('x', i);
+        address = new_address;
         break;
       }
     }
 
-    if (!address) {
-      throw new Error('Maximum number of clients reached.');
-    }
     // Create Client
     const id = crypto.randomUUID();
     const client = {
